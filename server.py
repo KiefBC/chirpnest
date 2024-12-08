@@ -23,10 +23,11 @@ def broadcast_message(message, sender_socket=None) -> None:
     6. If an error occurs, print the error
     7. If the client has disconnected, remove the client from the list of clients
     """
-    message_length = pack("!H", len(message))  # Pack the message length
+    message_bytes = message.encode("utf-8")  # Encode the message to bytes
+    message_length = pack("!H", len(message_bytes))  # Pack the message length
     # This is a tuple with the message length and the message, where [0] is the message length and [1] is the message
     message_and_header = (
-        message_length + message
+        message_length + message_bytes
     )  # Concatenate the message length and the message
     for client in clients:
         if client != sender_socket:  # Don't send the message to the sender
@@ -34,7 +35,8 @@ def broadcast_message(message, sender_socket=None) -> None:
                 client.sendall(message_and_header)  # Send the message to the client
             except Exception as e:
                 print(f"Error: {e}")
-                clients.remove(client)
+                if client in clients:
+                    clients.remove(client)
 
 
 def handle_client(client_socket, user_name) -> None:
@@ -57,6 +59,7 @@ def handle_client(client_socket, user_name) -> None:
         broadcast_message(
             f"{user_name} has joined the chat!", client_socket
         )  # Broadcast that the client has joined the chat
+        print(f"{user_name} has joined the chat!")
         while True:  # Loop to receive messages from the client
             header_data = client_socket.recv(2)  # Receive the header data
             # Check if the client has disconnected
@@ -75,7 +78,7 @@ def handle_client(client_socket, user_name) -> None:
                 "utf-8"
             )  # Decode the message data to a string from bytes
             broadcast_message(
-                f"{user_name}: {message}", client_socket
+                f"\n{user_name}: {message}", client_socket
             )  # Broadcast the message to all clients
     # If an error occurs
     except Exception as e:
@@ -121,7 +124,7 @@ def main() -> None:
                 client_socket, client_address = (
                     server_socket.accept()
                 )  # Accept the incoming connection
-                user_name = f"Player {incremented_id}"  # Incremented ID for each client
+                user_name = f"User {incremented_id}"  # Incremented ID for each client
                 incremented_id += 1  # Increment the ID for the next client
                 clients.append(client_socket)  # Add the client to the list of clients
                 client_socket.sendall(
