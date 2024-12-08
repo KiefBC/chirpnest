@@ -87,7 +87,7 @@ def handle_client(client_socket, user_name) -> None:
         broadcast_message(f"{user_name} has left the chat!")
 
 
-def main():
+def main() -> None:
     """
     Main function to start the server
 
