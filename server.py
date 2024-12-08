@@ -1,12 +1,17 @@
+import sys
 from socket import AF_INET, SOCK_STREAM, socket  # Used to create a socket
 from struct import pack, unpack  # Used to pack and unpack data
-from threading import Thread  # Used to create a thread
+from threading import Lock, Thread  # Used to create a thread
 
 # Server Configuration
 HOST = ""  # All available interfaces
 PORT = 12345  # Port to listen on (non-privileged ports are > 1023)
 clients = []  # List of connected clients
 incremented_id = 0  # Incremented ID for each client
+clients_lock = (
+    Lock()
+)  # This is used to lock the clients list when adding or removing clients
+server_running = True  # This is used to stop the server
 
 
 def broadcast_message(message, sender_socket=None) -> None:
@@ -29,14 +34,19 @@ def broadcast_message(message, sender_socket=None) -> None:
     message_and_header = (
         message_length + message_bytes
     )  # Concatenate the message length and the message
-    for client in clients:
+
+    with clients_lock:
+        current_clients = clients.copy()
+
+    for client in current_clients:
         if client != sender_socket:  # Don't send the message to the sender
             try:
                 client.sendall(message_and_header)  # Send the message to the client
             except Exception as e:
-                print(f"Error: {e}")
-                if client in clients:
-                    clients.remove(client)
+                print(f"Error broadcasting to Client: {e}")
+                with clients_lock:
+                    if client in clients:
+                        clients.remove(client)
 
 
 def handle_client(client_socket, user_name) -> None:
@@ -85,9 +95,40 @@ def handle_client(client_socket, user_name) -> None:
         print(f"Error: {e}")
     # If the client has disconnected
     finally:
-        clients.remove(client_socket)  # Remove the client from the list of clients
-        client_socket.close()  # Close the client socket
-        broadcast_message(f"{user_name} has left the chat!")
+        with clients_lock:
+            if client_socket in clients:
+                clients.remove(client_socket)
+
+        try:
+            client_socket.close()  # Close the client socket
+        except Exception as e:
+            print(f"Error closing Client Socket: {e}")
+
+        if server_running:
+            broadcast_message(f"{user_name} has left the chat!")
+
+
+def stop_server(server_socket):
+    global server_running
+    server_running = False
+    print("\nStopping server...")
+    print("Closing all client connections...")
+
+    with clients_lock:
+        for client in clients[:]:
+            try:
+                client.close()
+            except Exception as e:
+                print(f"Error closing Client Connection: {e}")
+        clients.clear()
+
+    try:
+        server_socket.close()
+    except Exception as e:
+        print(f"Error closing Server Socket: {e}")
+
+    print("Server stopped")
+    sys.exit(0)
 
 
 def main() -> None:
@@ -109,45 +150,51 @@ def main() -> None:
     11. If an error occurs, print the error and close all client sockets and the server socket
     12. If the server is stopped, print a message and close all client sockets and the server socket
     """
-    global incremented_id
+    global incremented_id, server_running
     # Create a TCP socket
-    with socket(AF_INET, SOCK_STREAM) as server_socket:
-        # Bind the server socket to the host and port
-        server_socket.bind((HOST, PORT))
-        # Listen for incoming connections
-        server_socket.listen()
-        print(f"Server listening on {HOST}:{PORT}")
-        try:
-            while True:  # Loop to accept incoming connections
-                # client_address is the address of the client but we don't need it
-                # if we did we would use it to send data back to the client
-                client_socket, client_address = (
-                    server_socket.accept()
-                )  # Accept the incoming connection
-                user_name = f"User {incremented_id}"  # Incremented ID for each client
-                incremented_id += 1  # Increment the ID for the next client
-                clients.append(client_socket)  # Add the client to the list of clients
-                client_socket.sendall(
-                    pack("!H", len(user_name)) + user_name.encode("utf-8")
-                )  # Send the length of the user name and the user name to the client
-                # target is the function to be called when the thread starts
-                # args is a tuple with the arguments to be passed to the target function
-                thread = Thread(
-                    target=handle_client, args=(client_socket, user_name)
-                )  # Create a thread to handle the client
-                thread.start()  # Start the thread
-        except KeyboardInterrupt:
-            print("\nStopping server...")
-            print("Closing all client connections...")
-            for client in clients:
-                client.close()
-            server_socket.close()
-        # If an error occurs, print the error and close all client sockets and the server socket
-        except Exception as e:
-            print(f"Error: {e}")
-            for client in clients:
-                client.close()  # Close all client sockets
-            server_socket.close()  # Close the server socket
+    try:
+        with socket(AF_INET, SOCK_STREAM) as server_socket:
+            # Bind the server socket to the host and port
+            server_socket.bind((HOST, PORT))
+            # Listen for incoming connections
+            server_socket.listen()
+            print(f"Server listening on {HOST}:{PORT}")
+
+            while server_running:  # Loop to accept incoming connections
+                try:
+                    # client_address is the address of the client but we don't need it
+                    # if we did we would use it to send data back to the client
+                    client_socket, client_address = (
+                        server_socket.accept()
+                    )  # Accept the incoming connection
+                    user_name = (
+                        f"User {incremented_id}"  # Incremented ID for each client
+                    )
+                    incremented_id += 1  # Increment the ID for the next client
+
+                    with clients_lock:
+                        clients.append(
+                            client_socket
+                        )  # Add the client to the list of clients
+
+                    client_socket.sendall(
+                        pack("!H", len(user_name)) + user_name.encode("utf-8")
+                    )  # Send the length of the user name and the user name to the client
+                    # target is the function to be called when the thread starts
+                    # args is a tuple with the arguments to be passed to the target function
+                    thread = Thread(
+                        target=handle_client,
+                        args=(client_socket, user_name),
+                        daemon=True,
+                    )  # Create a thread to handle the client
+                    thread.start()  # Start the thread
+                except ConnectionError as e:
+                    print(f"Connection Error: {e}")
+                    break
+    except KeyboardInterrupt:
+        stop_server(server_socket)
+    except Exception:
+        stop_server(server_socket)
 
 
 if __name__ == "__main__":
